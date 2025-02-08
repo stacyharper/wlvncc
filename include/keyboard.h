@@ -40,6 +40,7 @@ struct keyboard {
 	uint32_t led_state;
 
 	bool waiting_for_modifiers;
+	bool xkb_compatible;
 };
 
 struct keyboard_collection {
