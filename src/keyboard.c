@@ -102,8 +102,11 @@ static void keyboard_keymap(void* data, struct wl_keyboard* wl_keyboard,
 		keyboard_collection_find_wl_keyboard(self, wl_keyboard);
 	assert(keyboard);
 
-	if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
+	if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+		keyboard->xkb_compatible = false;
 		return;
+	}
+	keyboard->xkb_compatible = true;
 
 	char* buffer = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
 	assert(buffer);
@@ -162,6 +165,9 @@ static void keyboard_key(void* data, struct wl_keyboard* wl_keyboard,
 		keyboard_collection_find_wl_keyboard(self, wl_keyboard);
 	assert(keyboard);
 
+	if (!keyboard->xkb_compatible)
+		return;
+
 	enum xkb_key_direction dir =
 		xbk_key_direction_from_wl_keyboard_key_state(state);
 	xkb_state_update_key(keyboard->state, key + 8, dir);
@@ -208,6 +214,9 @@ static void keyboard_modifiers(void* data, struct wl_keyboard* wl_keyboard,
 	struct keyboard* keyboard =
 		keyboard_collection_find_wl_keyboard(self, wl_keyboard);
 	assert(keyboard);
+
+	if (!keyboard->xkb_compatible)
+		return;
 
 	xkb_state_update_mask(keyboard->state, depressed, latched, locked, 0, 0,
 			group);
