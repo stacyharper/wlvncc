@@ -31,13 +31,15 @@ enum keyboard_led_state {
 	KEYBOARD_LED_CAPS_LOCK = 1 << 2,
 };
 
-struct keyboard* keyboard_new(struct wl_keyboard* wl_keyboard)
+struct keyboard* keyboard_new(struct wl_keyboard* wl_keyboard,
+		struct seat* seat)
 {
 	struct keyboard* self = calloc(1, sizeof(*self));
 	if (!self)
 		return NULL;
 
 	self->wl_keyboard = wl_keyboard;
+	self->seat = seat;
 	self->context = xkb_context_new(0);
 
 	return self;
@@ -100,8 +102,11 @@ static void keyboard_keymap(void* data, struct wl_keyboard* wl_keyboard,
 		keyboard_collection_find_wl_keyboard(self, wl_keyboard);
 	assert(keyboard);
 
-	if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1)
+	if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) {
+		keyboard->xkb_compatible = false;
 		return;
+	}
+	keyboard->xkb_compatible = true;
 
 	char* buffer = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
 	assert(buffer);
@@ -160,6 +165,9 @@ static void keyboard_key(void* data, struct wl_keyboard* wl_keyboard,
 		keyboard_collection_find_wl_keyboard(self, wl_keyboard);
 	assert(keyboard);
 
+	if (!keyboard->xkb_compatible)
+		return;
+
 	enum xkb_key_direction dir =
 		xbk_key_direction_from_wl_keyboard_key_state(state);
 	xkb_state_update_key(keyboard->state, key + 8, dir);
@@ -207,6 +215,9 @@ static void keyboard_modifiers(void* data, struct wl_keyboard* wl_keyboard,
 		keyboard_collection_find_wl_keyboard(self, wl_keyboard);
 	assert(keyboard);
 
+	if (!keyboard->xkb_compatible)
+		return;
+
 	xkb_state_update_mask(keyboard->state, depressed, latched, locked, 0, 0,
 			group);
 
@@ -230,9 +241,9 @@ static struct wl_keyboard_listener keyboard_listener = {
 };
 
 int keyboard_collection_add_wl_keyboard(struct keyboard_collection* self,
-		struct wl_keyboard* wl_keyboard)
+		struct wl_keyboard* wl_keyboard, struct seat* seat)
 {
-	struct keyboard* keyboard = keyboard_new(wl_keyboard);
+	struct keyboard* keyboard = keyboard_new(wl_keyboard, seat);
 	if (!keyboard)
 		return -1;
 
