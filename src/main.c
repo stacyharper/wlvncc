@@ -36,6 +36,7 @@
 #include "inhibitor.h"
 #include "viewporter-v1.h"
 #include "single-pixel-buffer-v1.h"
+#include "fractional-scale-v1.h"
 #include "pixman.h"
 #include "xdg-shell.h"
 #include "shm.h"
@@ -66,14 +67,16 @@ struct window {
 	struct xdg_surface* xdg_bg_surface;
 	struct xdg_toplevel* xdg_bg_toplevel;
 	struct wp_viewport* wp_bg_viewport;
+	struct wp_fractional_scale_v1* fractional_scale;
 
 	struct wl_surface* wl_surface;
 	struct wl_subsurface* wl_subsurface;
 	struct wp_viewport* wp_viewport;
 
 	int preferred_buffer_scale;
+	double preferred_fractional_scale;
 	int width, height;
-	int32_t scale;
+	double scale;
 
 	struct buffer* buffers[3];
 	struct buffer* back_buffer;
@@ -116,6 +119,7 @@ struct shortcuts_inhibitor* inhibitor;
 struct wl_subcompositor* subcompositor;
 struct wp_viewporter* viewporter;
 struct wp_single_pixel_buffer_manager_v1* single_pixel_manager;
+static struct wp_fractional_scale_manager_v1 *wfs_mgr;
 
 static bool have_egl = false;
 static bool shortcut_inhibit = false;
@@ -181,6 +185,8 @@ static void registry_add(void* data, struct wl_registry* registry, uint32_t id,
 		viewporter = wl_registry_bind(registry, id, &wp_viewporter_interface, 1);
 	} else if (strcmp(interface, wp_single_pixel_buffer_manager_v1_interface.name) == 0) {
 		single_pixel_manager = wl_registry_bind(registry, id, &wp_single_pixel_buffer_manager_v1_interface, 1);
+	} else if (strcmp(interface, wp_fractional_scale_manager_v1_interface.name) == 0) {
+		wfs_mgr = wl_registry_bind(registry, id, &wp_fractional_scale_manager_v1_interface, 1);
 	} else if (strcmp(interface, "wl_seat") == 0) {
 		struct wl_seat* wl_seat;
 		wl_seat = wl_registry_bind(registry, id, &wl_seat_interface, 5);
@@ -390,8 +396,11 @@ static void window_attach(struct window* w)
 	wl_surface_attach(w->wl_surface, w->back_buffer->wl_buffer, 0, 0);
 }
 
-int32_t window_get_scale(struct window* w)
+double window_get_scale(struct window* w)
 {
+	if (w->preferred_fractional_scale)
+		return w->preferred_fractional_scale;
+
 	if (w->preferred_buffer_scale)
 		return w->preferred_buffer_scale;
 
@@ -498,7 +507,7 @@ static const struct xdg_surface_listener xdg_surface_listener = {
 
 static void window_resize(struct window* w, int width, int height)
 {
-	int32_t scale = window_get_scale(window);
+	double scale = window_get_scale(window);
 
 	if (width == 0 || height == 0 || scale == 0)
 		return;
@@ -581,6 +590,22 @@ static const struct wl_surface_listener wl_surface_listener = {
 	.preferred_buffer_transform = wl_surface_preferred_buffer_transform,
 };
 
+static void
+wp_fractional_scale_preferred_scale(
+	void *data, struct wp_fractional_scale_v1 *wp_fractional_scale_v1,
+	uint32_t scale)
+{
+	struct window * w = data;
+	w->preferred_fractional_scale = (double)scale / 120;
+
+	window_resize(window, window->width, window->height);
+}
+
+static const struct wp_fractional_scale_v1_listener
+	wp_fractional_scale_listener = {
+		.preferred_scale = wp_fractional_scale_preferred_scale,
+};
+
 struct wl_buffer* create_single_pixel_buffer_fallback(struct wl_shm** pixels,
 		struct wl_buffer** wl_buffer, uint32_t format)
 {
@@ -622,6 +647,7 @@ static struct window* window_create(const char* app_id, const char* title)
 		return NULL;
 
 	w->preferred_buffer_scale = 0;
+	w->preferred_fractional_scale = 0;
 	pixman_region_init(&w->current_damage);
 
 	if (single_pixel_manager)
@@ -670,11 +696,23 @@ static struct window* window_create(const char* app_id, const char* title)
 	if (!w->wp_viewport)
 		goto wp_viewport_failure;
 
+	if (wfs_mgr) {
+		w->fractional_scale = wp_fractional_scale_manager_v1_get_fractional_scale(
+			wfs_mgr, w->wl_bg_surface);
+		if (!w->fractional_scale)
+			goto wfs_fractional_scale_failure;
+
+		wp_fractional_scale_v1_add_listener(w->fractional_scale,
+			&wp_fractional_scale_listener, w);
+	}
+
 	wl_surface_commit(w->wl_bg_surface);
 	wl_surface_commit(w->wl_surface);
 
 	return w;
 
+wfs_fractional_scale_failure:
+	wp_viewport_destroy(w->wp_viewport);
 wp_viewport_failure:
 	wl_subsurface_destroy(w->wl_subsurface);
 wl_subsurface_failure:
